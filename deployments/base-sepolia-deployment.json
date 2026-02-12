@@ -1,0 +1,36 @@
+{
+  "network": "base_sepolia",
+  "chainId": 84532,
+  "deployer": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96",
+  "timestamp": "2026-02-11T18:32:47.935Z",
+  "contracts": {
+    "MerkleVerifier": {
+      "address": "0x696478AE81B71a9be648fDF16d09D42c33883622",
+      "type": "library"
+    },
+    "MultiTokenTreasury": {
+      "address": "0x508732e0AAD03C472C2f1b43A94953CcA4F510E1",
+      "type": "main",
+      "admin": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96"
+    },
+    "MockUSDC": {
+      "address": "0x09ebABF56878a303510C02Bfd29CEcfC26450334",
+      "type": "test-token",
+      "decimals": 6
+    }
+  },
+  "blockExplorer": {
+    "MerkleVerifier": "https://sepolia.basescan.org/address/0x696478AE81B71a9be648fDF16d09D42c33883622",
+    "MultiTokenTreasury": "https://sepolia.basescan.org/address/0x508732e0AAD03C472C2f1b43A94953CcA4F510E1",
+    "MockUSDC": "https://sepolia.basescan.org/address/0x09ebABF56878a303510C02Bfd29CEcfC26450334"
+  },
+  "relayer": {
+    "authorizedRelayers": [
+      "0x300Fc5016AE0307f995C638AA756b050E9c67A18",
+      "0x09970187A9c10AAC713E9bD95b9b1e55656a5Bd1",
+      "0xA834cDCC124C340A4CAcBAEBb6F17b318C755448"
+    ],
+    "protocolFeeBps": 50,
+    "maxGasPriceCapGwei": 10
+  }
+}

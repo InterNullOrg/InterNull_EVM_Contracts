@@ -1,0 +1,36 @@
+{
+  "network": "bnb_testnet",
+  "chainId": 97,
+  "deployer": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96",
+  "timestamp": "2026-02-11T18:33:39.926Z",
+  "contracts": {
+    "MerkleVerifier": {
+      "address": "0xD107Eb1A56fEE73437cA812b52141407AfBB0A54",
+      "type": "library"
+    },
+    "MultiTokenTreasury": {
+      "address": "0x4cd2C502a4C0615dbdDd207fAE0E8085e5360D34",
+      "type": "main",
+      "admin": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96"
+    },
+    "MockBUSD": {
+      "address": "0xD13F01Db590cF2c1A600f9AB0DdF55aF8DCa2948",
+      "type": "test-token",
+      "decimals": 18
+    }
+  },
+  "blockExplorer": {
+    "MerkleVerifier": "https://testnet.bscscan.com/address/0xD107Eb1A56fEE73437cA812b52141407AfBB0A54",
+    "MultiTokenTreasury": "https://testnet.bscscan.com/address/0x4cd2C502a4C0615dbdDd207fAE0E8085e5360D34",
+    "MockBUSD": "https://testnet.bscscan.com/address/0xD13F01Db590cF2c1A600f9AB0DdF55aF8DCa2948"
+  },
+  "relayer": {
+    "authorizedRelayers": [
+      "0x300Fc5016AE0307f995C638AA756b050E9c67A18",
+      "0x09970187A9c10AAC713E9bD95b9b1e55656a5Bd1",
+      "0xA834cDCC124C340A4CAcBAEBb6F17b318C755448"
+    ],
+    "protocolFeeBps": 50,
+    "maxGasPriceCapGwei": 20
+  }
+}

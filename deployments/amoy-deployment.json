@@ -1,0 +1,33 @@
+{
+  "network": "amoy",
+  "chainId": 80002,
+  "deployer": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96",
+  "timestamp": "2025-11-05T19:37:50.792Z",
+  "contracts": {
+    "MerkleVerifier": {
+      "address": "0x6f366D98Ea4132D6F9259ceD11D24bAfE37FC056",
+      "type": "library"
+    },
+    "MultiTokenTreasury": {
+      "address": "0x39Ff2ad0589Ceb82B941Ccb0E85d59A7806B471D",
+      "type": "main",
+      "admin": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96"
+    },
+    "MockUSDC": {
+      "address": "0x8F2cF7140bE26f2d9D56F06b8CC5081f89E7Cc38",
+      "type": "test-token",
+      "decimals": 6
+    },
+    "MockUSDT": {
+      "address": "0x8F6f1713a8B1987A8a96cEAc1734c4b2f7CAd55c",
+      "type": "test-token",
+      "decimals": 6
+    }
+  },
+  "blockExplorer": {
+    "MerkleVerifier": "https://amoy.polygonscan.com/address/0x6f366D98Ea4132D6F9259ceD11D24bAfE37FC056",
+    "MultiTokenTreasury": "https://amoy.polygonscan.com/address/0x39Ff2ad0589Ceb82B941Ccb0E85d59A7806B471D",
+    "MockUSDC": "https://amoy.polygonscan.com/address/0x8F2cF7140bE26f2d9D56F06b8CC5081f89E7Cc38",
+    "MockUSDT": "https://amoy.polygonscan.com/address/0x8F6f1713a8B1987A8a96cEAc1734c4b2f7CAd55c"
+  }
+}

@@ -1,0 +1,10 @@
+
+# Database files (added for cleanup)
+node/data/mongodb/
+node/data/redis/
+mongod.lock
+
+# Backup files
+*.backup
+*.bak
+*.old
