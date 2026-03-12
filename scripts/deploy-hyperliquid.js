@@ -7,22 +7,19 @@ async function main() {
   console.log("Deploying to Hyperliquid Testnet");
   console.log("=====================================\n");
 
-  // Get the deployer account
   const [deployer] = await hre.ethers.getSigners();
   const deployerAddress = await deployer.getAddress();
 
   console.log("Deployer address:", deployerAddress);
 
-  // Check balance
   const balance = await deployer.getBalance();
-  const balanceInEth = hre.ethers.utils.formatEther(balance);
-  console.log("Deployer balance:", balanceInEth, "HYPE");
+  console.log("Deployer balance:", hre.ethers.utils.formatEther(balance), "HYPE");
 
   if (balance.eq(0)) {
     console.error("\n❌ ERROR: Deployer has no HYPE!");
     console.log("\n📝 Get Hyperliquid testnet HYPE from:");
-    console.log("   - https://app.hyperliquid-testnet.xyz/");
-    console.log("   - Bridge from other testnet or request from faucet");
+    console.log("   - https://app.hyperliquid-testnet.xyz/drip");
+    console.log("   - https://faucet.chainstack.com/hyperliquid-testnet-faucet");
     console.log("\n   Your address:", deployerAddress);
     process.exit(1);
   }
@@ -37,25 +34,54 @@ async function main() {
     await merkleVerifier.deployed();
     console.log("   ✅ MerkleVerifier deployed to:", merkleVerifier.address);
 
-    // 2. Deploy MultiTokenTreasury (no library linking needed as it's included in bytecode)
+    // 2. Deploy MultiTokenTreasury
     console.log("\n2. Deploying MultiTokenTreasury contract...");
     const MultiTokenTreasury = await hre.ethers.getContractFactory("MultiTokenTreasury");
-
-    // Deploy with the deployer address as owner
     const treasury = await MultiTokenTreasury.deploy(deployerAddress);
     await treasury.deployed();
     console.log("   ✅ MultiTokenTreasury deployed to:", treasury.address);
     console.log("   ✅ Admin set to:", deployerAddress);
 
-    // 3. Deploy MockERC20 for USDC testing (optional)
+    // 3. Deploy MockERC20 for USDC testing
     console.log("\n3. Deploying MockERC20 (USDC) for testing...");
     const MockERC20 = await hre.ethers.getContractFactory("MockERC20");
-    // Constructor: name, symbol, decimals, totalSupply
-    const initialSupply = hre.ethers.utils.parseUnits("1000000", 6); // 1M USDC
-    const mockUSDC = await MockERC20.deploy("Mock USDC", "USDC", 6, initialSupply);
+    const mockUSDC = await MockERC20.deploy("Mock USDC", "USDC", 6);
     await mockUSDC.deployed();
+    const initialSupply = hre.ethers.utils.parseUnits("1000000", 6);
+    await mockUSDC.mint(deployerAddress, initialSupply);
     console.log("   ✅ MockUSDC deployed to:", mockUSDC.address);
     console.log("   ✅ Initial supply: 1,000,000 USDC minted to deployer");
+
+    // 4. Configure relayers and fees
+    console.log("\n4. Configuring relayers and fees...");
+    const RELAYER_WALLETS = [
+      { name: "Node 1", address: "0x300Fc5016AE0307f995C638AA756b050E9c67A18" },
+      { name: "Node 2", address: "0x09970187A9c10AAC713E9bD95b9b1e55656a5Bd1" },
+      { name: "Node 3", address: "0xA834cDCC124C340A4CAcBAEBb6F17b318C755448" },
+    ];
+
+    for (const wallet of RELAYER_WALLETS) {
+      const tx = await treasury.authorizeRelayer(wallet.address, true);
+      await tx.wait();
+      console.log(`   ✅ Authorized relayer: ${wallet.name} (${wallet.address})`);
+    }
+
+    const feeTx = await treasury.setProtocolFee(50);
+    await feeTx.wait();
+    console.log("   ✅ Protocol fee set to 0.5% (50 bps)");
+
+    const capTx = await treasury.setMaxGasPriceCap(hre.ethers.utils.parseUnits("50", "gwei"));
+    await capTx.wait();
+    console.log("   ✅ Max gas price cap set to 50 gwei");
+
+    // 5. Add 0.001 HYPE denomination (constructor registers 0.01, 0.1, 0.5, 1)
+    console.log("\n5. Adding 0.001 HYPE denomination...");
+    const denomTx = await treasury.updateDenominations(
+      "0x0000000000000000000000000000000000000000",
+      [hre.ethers.utils.parseEther("0.001")]
+    );
+    await denomTx.wait();
+    console.log("   ✅ Added 0.001 HYPE denomination");
 
     // Save deployment info
     const deploymentInfo = {
@@ -64,29 +90,22 @@ async function main() {
       deployer: deployerAddress,
       timestamp: new Date().toISOString(),
       contracts: {
-        MerkleVerifier: {
-          address: merkleVerifier.address,
-          type: "library"
-        },
-        MultiTokenTreasury: {
-          address: treasury.address,
-          type: "main",
-          admin: deployerAddress
-        },
-        MockUSDC: {
-          address: mockUSDC.address,
-          type: "test-token",
-          decimals: 6
-        }
+        MerkleVerifier: { address: merkleVerifier.address, type: "library" },
+        MultiTokenTreasury: { address: treasury.address, type: "main", admin: deployerAddress },
+        MockUSDC: { address: mockUSDC.address, type: "test-token", decimals: 6 }
       },
       blockExplorer: {
         MerkleVerifier: `https://testnet.purrsec.com/address/${merkleVerifier.address}`,
         MultiTokenTreasury: `https://testnet.purrsec.com/address/${treasury.address}`,
         MockUSDC: `https://testnet.purrsec.com/address/${mockUSDC.address}`
+      },
+      relayer: {
+        authorizedRelayers: RELAYER_WALLETS.map(w => w.address),
+        protocolFeeBps: 50,
+        maxGasPriceCapGwei: 50
       }
     };
 
-    // Save to file
     const deploymentsDir = path.join(__dirname, "../deployments");
     if (!fs.existsSync(deploymentsDir)) {
       fs.mkdirSync(deploymentsDir, { recursive: true });
@@ -95,7 +114,6 @@ async function main() {
     const filePath = path.join(deploymentsDir, "hyperliquid-testnet-deployment.json");
     fs.writeFileSync(filePath, JSON.stringify(deploymentInfo, null, 2));
 
-    // Print summary
     console.log("\n=====================================");
     console.log("🎉 DEPLOYMENT SUCCESSFUL!");
     console.log("=====================================\n");
@@ -104,19 +122,19 @@ async function main() {
     console.log("   MultiTokenTreasury: ", treasury.address);
     console.log("   MockUSDC:           ", mockUSDC.address);
     console.log("\n🔍 View on Block Explorer:");
-    console.log("   Purrsec:    https://testnet.purrsec.com/address/" + treasury.address);
-    console.log("   Hyperstats: https://evm.hyperstats.xyz/address/" + treasury.address);
+    console.log("   Purrsec: https://testnet.purrsec.com/address/" + treasury.address);
     console.log("\n📁 Deployment info saved to:", filePath);
 
     console.log("\n⚠️  NEXT STEPS:");
-    console.log("1. Update node/.env with:");
-    console.log(`   HYPERLIQUID_TESTNET_TREASURY_ADDRESS=${treasury.address}`);
-    console.log(`   DEFAULT_ADMIN_ADDRESS=${deployerAddress}`);
-    console.log("\n2. Add MockUSDC to treasury as supported token:");
-    console.log("   Call addToken() with MockUSDC address");
-    console.log("\n3. Fund the treasury with HYPE for operations");
-    console.log("\n4. Pre-generate keys using the backend admin API");
-    console.log("\n5. Test cross-chain withdrawals between different testnets");
+    console.log("1. Add 'hyperliquid-testnet' chain in admin panel with:");
+    console.log(`   Treasury: ${treasury.address}`);
+    console.log(`   RPC: https://rpc.hyperliquid-testnet.xyz/evm`);
+    console.log(`   Chain ID: 998`);
+    console.log(`   Native currency: HYPE`);
+    console.log("\n2. Add MockUSDC as supported token in admin panel:");
+    console.log(`   Address: ${mockUSDC.address}`);
+    console.log("\n3. Generate key batches for HYPE denominations");
+    console.log("\n4. Fund the treasury with HYPE for testing");
 
   } catch (error) {
     console.error("\n❌ Deployment failed:", error.message);

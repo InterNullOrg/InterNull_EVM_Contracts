@@ -44,7 +44,7 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     }
 
     MerkleRootInfo[] public merkleRoots;
-    mapping(bytes32 => uint256) public merkleRootToId; // For quick lookup
+    mapping(bytes32 => uint256) public merkleRootToId; // Stores rootId+1 (0 = not found). M-3 fix.
     mapping(bytes32 => bool) public merkleRootExists; // For O(1) duplicate detection
 
     // Nullifier tracking (prevents double-spending)
@@ -67,6 +67,7 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     uint256 public maxGasPriceCap;                      // Max reimbursable gas price in wei (anti-griefing)
     mapping(address => bool) public authorizedRelayers;  // Whitelisted relayer addresses
     uint256 public relayerGasPool;                       // Separate ETH pool for ERC20 relay gas reimbursement
+    uint256 public relayGasOverhead = 50000;             // H-3 fix: Configurable gas overhead for relay reimbursement
 
     // Events
     event TokenAdded(address indexed token, string symbol, uint8 decimals, uint256[] denominations);
@@ -115,6 +116,7 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     event EmergencyWithdrawal(address indexed token, uint256 amount);
     event RelayerGasPoolFunded(uint256 amount, uint256 newBalance);
     event RelayerGasPoolWithdrawn(uint256 amount, uint256 newBalance);
+    event RelayGasOverheadUpdated(uint256 oldOverhead, uint256 newOverhead);
 
     // Custom errors
     error TokenNotSupported();
@@ -142,8 +144,8 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
             nativeSymbol = "BNB";
         } else if (block.chainid == 97) {
             nativeSymbol = "tBNB"; // Test BNB
-        } else if (block.chainid == 137 || block.chainid == 80001) {
-            nativeSymbol = "MATIC";
+        } else if (block.chainid == 137 || block.chainid == 80001 || block.chainid == 80002) {
+            nativeSymbol = "POL";
         } else if (block.chainid == 43114 || block.chainid == 43113) {
             nativeSymbol = "AVAX";
         }
@@ -156,6 +158,9 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         nativeDenominations[3] = 1 ether;
 
         _addToken(ETH_ADDRESS, nativeSymbol, 18, nativeDenominations);
+
+        // C-1 fix: Set a safe default gas price cap (500 gwei) to prevent relayer gas price manipulation
+        maxGasPriceCap = 500 gwei;
     }
 
     // ============ Token Management ============
@@ -182,6 +187,10 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         uint8 decimals,
         uint256[] memory denominations
     ) private {
+        // L-3 fix: Block overwriting an active token (must removeToken first)
+        require(!tokenInfo[token].isActive || token == ETH_ADDRESS && supportedTokens.length == 0,
+            "Token already active; remove it first");
+
         if (!TokenHandler.validateDenominations(denominations)) {
             revert InvalidTokenConfig();
         }
@@ -229,6 +238,15 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         TokenHandler.TokenInfo storage info = tokenInfo[token];
         for (uint256 i = 0; i < info.denominations.length; i++) {
             denominationExists[token][info.denominations[i]] = false;
+        }
+
+        // M-1 fix: Deactivate all Merkle roots associated with this token
+        for (uint256 i = 0; i < merkleRoots.length; i++) {
+            if (merkleRoots[i].isActive && merkleRoots[i].token == token) {
+                merkleRoots[i].isActive = false;
+                activeRootsCount--;
+                emit MerkleRootDeactivated(i);
+            }
         }
 
         tokenInfo[token].isActive = false;
@@ -303,7 +321,7 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
             usedKeys: 0
         }));
 
-        merkleRootToId[root] = rootId;
+        merkleRootToId[root] = rootId + 1; // M-3 fix: store id+1 so 0 means "not found"
         merkleRootExists[root] = true;
         activeRootsCount++;
         emit MerkleRootAdded(rootId, root, token, denomination, totalKeys);
@@ -457,6 +475,16 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
      * @param _relayer Address to authorize/revoke
      * @param _authorized Whether the address is authorized
      */
+    /**
+     * @notice Sets the gas overhead estimate for relay reimbursement
+     * @param _overhead Gas units for post-measurement operations (max 200000)
+     */
+    function setRelayGasOverhead(uint256 _overhead) external onlyOwner {
+        require(_overhead <= 200000, "Overhead too high");
+        emit RelayGasOverheadUpdated(relayGasOverhead, _overhead);
+        relayGasOverhead = _overhead;
+    }
+
     function authorizeRelayer(address _relayer, bool _authorized) external onlyOwner {
         authorizedRelayers[_relayer] = _authorized;
         emit RelayerAuthorized(_relayer, _authorized);
@@ -477,6 +505,13 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
      */
     function withdrawRelayerGasPool(uint256 amount) external onlyOwner {
         require(relayerGasPool >= amount, "Insufficient gas pool");
+
+        // C-2 fix: Solvency check — ensure remaining balance covers user deposits + fees
+        uint256 ethUserDeposits = totalDeposited[ETH_ADDRESS] - totalWithdrawn[ETH_ADDRESS];
+        uint256 ethFees = totalFeesCollected[ETH_ADDRESS] - totalFeesWithdrawn[ETH_ADDRESS];
+        require(address(this).balance - amount >= ethUserDeposits + ethFees + (relayerGasPool - amount),
+            "Would dip into user deposits or fees");
+
         relayerGasPool -= amount;
         (bool success, ) = owner().call{value: amount}("");
         require(success, "ETH transfer failed");
@@ -521,26 +556,27 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         );
 
         // Compute actual gas reimbursement from measured usage + overhead for remaining ops
-        uint256 gasUsed = gasStart - gasleft() + 50000;
+        uint256 gasUsed = gasStart - gasleft() + relayGasOverhead;
         uint256 gasReimbursement = gasUsed * tx.gasprice;
 
         uint256 netAmount;
 
         if (token == ETH_ADDRESS) {
-            // ETH: deduct all fees from withdrawal amount
+            // H-1 fix: ETH — protocol fee stays in contract, only gas reimbursement goes to relayer
             if (protocolFee + gasReimbursement > maxRelayerFee) revert MaxRelayerFeeExceeded();
             netAmount = amount - protocolFee - gasReimbursement;
             TokenHandler.handleWithdrawal(token, recipient, netAmount);
-            (bool success, ) = msg.sender.call{value: protocolFee + gasReimbursement}("");
-            if (!success) revert GasReimbursementFailed();
+            // Only reimburse gas to relayer; protocol fee is retained for owner
+            if (gasReimbursement > 0) {
+                (bool success, ) = msg.sender.call{value: gasReimbursement}("");
+                if (!success) revert GasReimbursementFailed();
+            }
         } else {
-            // ERC20: deduct protocol fee from token amount, reimburse gas from relayer pool
+            // H-1 fix: ERC20 — protocol fee stays in contract, gas reimbursement from pool
             if (protocolFee > maxRelayerFee) revert MaxRelayerFeeExceeded();
             netAmount = amount - protocolFee;
             TokenHandler.handleWithdrawal(token, recipient, netAmount);
-            if (protocolFee > 0) {
-                IERC20(token).safeTransfer(msg.sender, protocolFee);
-            }
+            // Protocol fee retained in contract as ERC20 tokens for owner withdrawal
             if (gasReimbursement > 0) {
                 if (relayerGasPool < gasReimbursement) revert InsufficientGasPool();
                 relayerGasPool -= gasReimbursement;
@@ -593,25 +629,25 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         );
 
         // Compute actual gas reimbursement from measured usage + overhead
-        uint256 gasUsed = gasStart - gasleft() + 50000;
+        uint256 gasUsed = gasStart - gasleft() + relayGasOverhead;
         uint256 gasReimbursement = gasUsed * tx.gasprice;
 
         uint256 netAmount;
 
         // Transfer to target address (e.g., NEAR Intents deposit address)
+        // H-1 fix: protocol fee retained in contract, only gas reimbursement to relayer
         if (token == ETH_ADDRESS) {
             if (protocolFee + gasReimbursement > maxRelayerFee) revert MaxRelayerFeeExceeded();
             netAmount = amount - protocolFee - gasReimbursement;
             TokenHandler.handleWithdrawal(token, targetAddress, netAmount);
-            (bool success, ) = msg.sender.call{value: protocolFee + gasReimbursement}("");
-            if (!success) revert GasReimbursementFailed();
+            if (gasReimbursement > 0) {
+                (bool success, ) = msg.sender.call{value: gasReimbursement}("");
+                if (!success) revert GasReimbursementFailed();
+            }
         } else {
             if (protocolFee > maxRelayerFee) revert MaxRelayerFeeExceeded();
             netAmount = amount - protocolFee;
             TokenHandler.handleWithdrawal(token, targetAddress, netAmount);
-            if (protocolFee > 0) {
-                IERC20(token).safeTransfer(msg.sender, protocolFee);
-            }
             if (gasReimbursement > 0) {
                 if (relayerGasPool < gasReimbursement) revert InsufficientGasPool();
                 relayerGasPool -= gasReimbursement;
@@ -721,8 +757,10 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         view
         returns (bool found, uint256 rootId)
     {
-        // O(1) lookup via mapping
-        uint256 id = merkleRootToId[rootHash];
+        // M-3 fix: O(1) lookup; stored value is id+1, so 0 means not found
+        uint256 storedId = merkleRootToId[rootHash];
+        if (storedId == 0) return (false, 0);
+        uint256 id = storedId - 1;
         if (id < merkleRoots.length && merkleRoots[id].root == rootHash && merkleRoots[id].isActive) {
             return (true, id);
         }
@@ -920,6 +958,16 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         uint256 availableFees = totalFeesCollected[token] - totalFeesWithdrawn[token];
         require(availableFees > 0, "No fees to withdraw");
 
+        // C-2 fix: Solvency check — ensure withdrawal won't dip into user deposits or relayer pool
+        uint256 balance = TokenHandler.getBalance(token);
+        if (token == ETH_ADDRESS) {
+            uint256 userDeposits = totalDeposited[token] - totalWithdrawn[token];
+            require(balance >= availableFees + userDeposits + relayerGasPool, "Insufficient balance: would dip into user deposits or relayer pool");
+        } else {
+            uint256 userDeposits = totalDeposited[token] - totalWithdrawn[token];
+            require(balance >= availableFees + userDeposits, "Insufficient balance: would dip into user deposits");
+        }
+
         totalFeesWithdrawn[token] += availableFees;
 
         if (token == ETH_ADDRESS) {
@@ -963,6 +1011,8 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         emit EmergencyWithdrawal(token, amount);
     }
 
-    // Fallback to receive ETH
-    receive() external payable {}
+    // M-2 fix: Only accept ETH via deposit() or fundRelayerGasPool(), reject bare transfers
+    receive() external payable {
+        revert("Use deposit() or fundRelayerGasPool()");
+    }
 }

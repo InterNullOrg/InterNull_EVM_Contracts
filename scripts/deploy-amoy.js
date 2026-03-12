@@ -50,18 +50,44 @@ async function main() {
     // 3. Deploy MockERC20 tokens for testing
     console.log("\n3. Deploying MockERC20 tokens for testing...");
     const MockERC20 = await hre.ethers.getContractFactory("MockERC20");
+    const initialSupply = hre.ethers.utils.parseUnits("1000000", 6); // 1M tokens
 
     // Deploy Mock USDC
-    const initialSupply = hre.ethers.utils.parseUnits("1000000", 6); // 1M USDC
-    const mockUSDC = await MockERC20.deploy("Mock USDC", "USDC", 6, initialSupply);
+    const mockUSDC = await MockERC20.deploy("Mock USDC", "USDC", 6);
     await mockUSDC.deployed();
+    await (await mockUSDC.mint(deployerAddress, initialSupply)).wait();
     console.log("   ✅ MockUSDC deployed to:", mockUSDC.address);
 
     // Deploy Mock USDT
-    const mockUSDT = await MockERC20.deploy("Mock USDT", "USDT", 6, initialSupply);
+    const mockUSDT = await MockERC20.deploy("Mock USDT", "USDT", 6);
     await mockUSDT.deployed();
+    await (await mockUSDT.mint(deployerAddress, initialSupply)).wait();
     console.log("   ✅ MockUSDT deployed to:", mockUSDT.address);
     console.log("   ✅ Initial supply: 1,000,000 tokens minted to deployer for each");
+
+    // 4. Configure relayer
+    console.log("\n4. Configuring relayer...");
+    const RELAYER_WALLETS = [
+      { name: "Node 1", address: "0x300Fc5016AE0307f995C638AA756b050E9c67A18" },
+      { name: "Node 2", address: "0x09970187A9c10AAC713E9bD95b9b1e55656a5Bd1" },
+      { name: "Node 3", address: "0xA834cDCC124C340A4CAcBAEBb6F17b318C755448" },
+    ];
+
+    for (const wallet of RELAYER_WALLETS) {
+      const tx = await treasury.authorizeRelayer(wallet.address, true);
+      await tx.wait();
+      console.log(`   ✅ Authorized relayer: ${wallet.name} (${wallet.address})`);
+    }
+
+    // Set protocol fee to 0.5% (50 basis points)
+    const feeTx = await treasury.setProtocolFee(50);
+    await feeTx.wait();
+    console.log("   ✅ Protocol fee set to 0.5% (50 bps)");
+
+    // Set max gas price cap to 50 gwei for Polygon
+    const capTx = await treasury.setMaxGasPriceCap(hre.ethers.utils.parseUnits("50", "gwei"));
+    await capTx.wait();
+    console.log("   ✅ Max gas price cap set to 50 gwei");
 
     // Save deployment info
     const deploymentInfo = {
@@ -95,6 +121,11 @@ async function main() {
         MultiTokenTreasury: `https://amoy.polygonscan.com/address/${treasury.address}`,
         MockUSDC: `https://amoy.polygonscan.com/address/${mockUSDC.address}`,
         MockUSDT: `https://amoy.polygonscan.com/address/${mockUSDT.address}`
+      },
+      relayer: {
+        authorizedRelayers: RELAYER_WALLETS.map(w => w.address),
+        protocolFeeBps: 50,
+        maxGasPriceCapGwei: 50
       }
     };
 
@@ -121,15 +152,18 @@ async function main() {
     console.log("\n📁 Deployment info saved to:", filePath);
 
     console.log("\n⚠️  NEXT STEPS:");
-    console.log("1. Update node/.env with:");
+    console.log("1. Update frontend .env with:");
+    console.log(`   REACT_APP_TREASURY_CONTRACT=${treasury.address}`);
+    console.log(`   REACT_APP_MERKLE_VERIFIER=${merkleVerifier.address}`);
+    console.log("\n2. Update node config with:");
     console.log(`   POLYGON_AMOY_TREASURY_ADDRESS=${treasury.address}`);
     console.log(`   DEFAULT_ADMIN_ADDRESS=${deployerAddress}`);
-    console.log("\n2. Verify contracts on PolygonScan (optional):");
-    console.log("   npx hardhat verify --network amoy", treasury.address, deployerAddress);
-    console.log("\n3. Add MockUSDC/MockUSDT to treasury as supported tokens:");
-    console.log("   Call addToken() with token addresses");
-    console.log("\n4. Fund the treasury with MATIC for operations");
-    console.log("\n5. Pre-generate keys using the backend admin API");
+    console.log("\n3. Fund relayer wallets with Amoy MATIC:");
+    for (const w of RELAYER_WALLETS) {
+      console.log(`   ${w.name}: ${w.address}`);
+    }
+    console.log("\n4. Verify on PolygonScan (optional):");
+    console.log(`   npx hardhat verify --network amoy ${treasury.address} ${deployerAddress}`);
 
   } catch (error) {
     console.error("\n❌ Deployment failed:", error.message);

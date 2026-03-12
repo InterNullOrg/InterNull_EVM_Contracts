@@ -2,32 +2,41 @@
   "network": "amoy",
   "chainId": 80002,
   "deployer": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96",
-  "timestamp": "2025-11-05T19:37:50.792Z",
+  "timestamp": "2026-02-18T13:33:42.575Z",
   "contracts": {
     "MerkleVerifier": {
-      "address": "0x6f366D98Ea4132D6F9259ceD11D24bAfE37FC056",
+      "address": "0xe097BD04583B6c456727111D7719D3DF7f289Ab8",
       "type": "library"
     },
     "MultiTokenTreasury": {
-      "address": "0x39Ff2ad0589Ceb82B941Ccb0E85d59A7806B471D",
+      "address": "0x254e83801A572d10835bEdf67dfF89fc1cCd93cB",
       "type": "main",
       "admin": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96"
     },
     "MockUSDC": {
-      "address": "0x8F2cF7140bE26f2d9D56F06b8CC5081f89E7Cc38",
+      "address": "0x2D7bC504327B633876FdA59886e622cc446235F5",
       "type": "test-token",
       "decimals": 6
     },
     "MockUSDT": {
-      "address": "0x8F6f1713a8B1987A8a96cEAc1734c4b2f7CAd55c",
+      "address": "0x65549094b36b94cD59AAab5e1712028Cf7F6c541",
       "type": "test-token",
       "decimals": 6
     }
   },
   "blockExplorer": {
-    "MerkleVerifier": "https://amoy.polygonscan.com/address/0x6f366D98Ea4132D6F9259ceD11D24bAfE37FC056",
-    "MultiTokenTreasury": "https://amoy.polygonscan.com/address/0x39Ff2ad0589Ceb82B941Ccb0E85d59A7806B471D",
-    "MockUSDC": "https://amoy.polygonscan.com/address/0x8F2cF7140bE26f2d9D56F06b8CC5081f89E7Cc38",
-    "MockUSDT": "https://amoy.polygonscan.com/address/0x8F6f1713a8B1987A8a96cEAc1734c4b2f7CAd55c"
+    "MerkleVerifier": "https://amoy.polygonscan.com/address/0xe097BD04583B6c456727111D7719D3DF7f289Ab8",
+    "MultiTokenTreasury": "https://amoy.polygonscan.com/address/0x254e83801A572d10835bEdf67dfF89fc1cCd93cB",
+    "MockUSDC": "https://amoy.polygonscan.com/address/0x2D7bC504327B633876FdA59886e622cc446235F5",
+    "MockUSDT": "https://amoy.polygonscan.com/address/0x65549094b36b94cD59AAab5e1712028Cf7F6c541"
+  },
+  "relayer": {
+    "authorizedRelayers": [
+      "0x300Fc5016AE0307f995C638AA756b050E9c67A18",
+      "0x09970187A9c10AAC713E9bD95b9b1e55656a5Bd1",
+      "0xA834cDCC124C340A4CAcBAEBb6F17b318C755448"
+    ],
+    "protocolFeeBps": 50,
+    "maxGasPriceCapGwei": 50
   }
 }

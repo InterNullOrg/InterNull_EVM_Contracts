@@ -153,8 +153,8 @@ describe("MultiTokenTreasury - Relayer Functions", function () {
     await treasury.addMerkleRoot(ethKeys.tree.root, ETH_ADDRESS, ETH_DENOMINATION, 10);
     await treasury.addMerkleRoot(usdcKeys.tree.root, mockUSDC.address, USDC_DENOMINATION, 10);
 
-    // Fund treasury with ETH (for deposits + gas reimbursement of ERC20 relays)
-    await owner.sendTransaction({ to: treasury.address, value: ethers.utils.parseEther("10") });
+    // Fund treasury with ETH via deposit (M-2 fix: bare ETH transfers now rejected)
+    await treasury.deposit(ETH_ADDRESS, ethers.utils.parseEther("10"), { value: ethers.utils.parseEther("10") });
 
     // Fund treasury with USDC
     await mockUSDC.mint(treasury.address, ethers.utils.parseUnits("10000", 6));
@@ -837,9 +837,9 @@ describe("MultiTokenTreasury - Relayer Functions", function () {
 
       const event = receipt.events.find(e => e.event === "RelayedWithdrawal");
 
-      // Relayer should have received USDC protocol fee
+      // H-1 fix: Protocol fee is now retained in contract, NOT sent to relayer
       const usdcGained = relayerUsdcAfter.sub(relayerUsdcBefore);
-      expect(usdcGained).to.equal(event.args.protocolFee);
+      expect(usdcGained).to.equal(0); // Relayer gets no USDC, only gas reimbursement in ETH
 
       // Relayer should have received ETH gas reimbursement (minus TX gas they paid)
       // Net ETH = gasReimbursement - gasCostPaid

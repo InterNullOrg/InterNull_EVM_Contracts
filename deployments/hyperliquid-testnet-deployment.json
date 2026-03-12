@@ -2,26 +2,35 @@
   "network": "hyperliquid_testnet",
   "chainId": 998,
   "deployer": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96",
-  "timestamp": "2025-11-10T12:17:03.776Z",
+  "timestamp": "2026-02-17T15:44:03.512Z",
   "contracts": {
     "MerkleVerifier": {
-      "address": "0x8F2cF7140bE26f2d9D56F06b8CC5081f89E7Cc38",
+      "address": "0xAc22B683176Dc1C4C955A082259b4578f8A97694",
       "type": "library"
     },
     "MultiTokenTreasury": {
-      "address": "0x8F6f1713a8B1987A8a96cEAc1734c4b2f7CAd55c",
+      "address": "0xD7F638A765a0266a2c64E494AbA839Cc2A3529F1",
       "type": "main",
       "admin": "0xd5182b47388e0ffe14781b9dBb7E9b699624cA96"
     },
     "MockUSDC": {
-      "address": "0x178577764B84245AF7e6dfE51cDdc96A4d28C061",
+      "address": "0xBCFa839F464a1B7159141E250FD0B84d4DFD1D16",
       "type": "test-token",
       "decimals": 6
     }
   },
   "blockExplorer": {
-    "MerkleVerifier": "https://testnet.purrsec.com/address/0x8F2cF7140bE26f2d9D56F06b8CC5081f89E7Cc38",
-    "MultiTokenTreasury": "https://testnet.purrsec.com/address/0x8F6f1713a8B1987A8a96cEAc1734c4b2f7CAd55c",
-    "MockUSDC": "https://testnet.purrsec.com/address/0x178577764B84245AF7e6dfE51cDdc96A4d28C061"
+    "MerkleVerifier": "https://testnet.purrsec.com/address/0xAc22B683176Dc1C4C955A082259b4578f8A97694",
+    "MultiTokenTreasury": "https://testnet.purrsec.com/address/0xD7F638A765a0266a2c64E494AbA839Cc2A3529F1",
+    "MockUSDC": "https://testnet.purrsec.com/address/0xBCFa839F464a1B7159141E250FD0B84d4DFD1D16"
+  },
+  "relayer": {
+    "authorizedRelayers": [
+      "0x300Fc5016AE0307f995C638AA756b050E9c67A18",
+      "0x09970187A9c10AAC713E9bD95b9b1e55656a5Bd1",
+      "0xA834cDCC124C340A4CAcBAEBb6F17b318C755448"
+    ],
+    "protocolFeeBps": 50,
+    "maxGasPriceCapGwei": 50
   }
 }
