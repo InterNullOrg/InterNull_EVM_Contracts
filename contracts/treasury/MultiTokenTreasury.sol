@@ -68,6 +68,8 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     mapping(address => bool) public authorizedRelayers;  // Whitelisted relayer addresses
     uint256 public relayerGasPool;                       // Separate ETH pool for ERC20 relay gas reimbursement
     uint256 public relayGasOverhead = 50000;             // H-3 fix: Configurable gas overhead for relay reimbursement
+    uint256 public erc20RelayFixedGas = 200000;          // Fixed gas estimate for ERC20 relay fee calculation
+    mapping(address => uint256) public ethPricePerToken;  // How many token units (in smallest unit) equal 1 ETH — admin-set via CoinGecko
 
     // Events
     event TokenAdded(address indexed token, string symbol, uint8 decimals, uint256[] denominations);
@@ -117,6 +119,8 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     event RelayerGasPoolFunded(uint256 amount, uint256 newBalance);
     event RelayerGasPoolWithdrawn(uint256 amount, uint256 newBalance);
     event RelayGasOverheadUpdated(uint256 oldOverhead, uint256 newOverhead);
+    event ERC20RelayFixedGasUpdated(uint256 oldGas, uint256 newGas);
+    event EthPricePerTokenUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
 
     // Custom errors
     error TokenNotSupported();
@@ -485,6 +489,43 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         relayGasOverhead = _overhead;
     }
 
+    /**
+     * @notice Sets the fixed gas estimate used for ERC20 relay fee calculation
+     * @param _fixedGas Gas units (e.g. 200000). Max 500000.
+     */
+    function setERC20RelayFixedGas(uint256 _fixedGas) external onlyOwner {
+        require(_fixedGas <= 500000, "Fixed gas too high");
+        emit ERC20RelayFixedGasUpdated(erc20RelayFixedGas, _fixedGas);
+        erc20RelayFixedGas = _fixedGas;
+    }
+
+    /**
+     * @notice Sets the ETH-to-token exchange rate for ERC20 relay gas deduction
+     * @dev Price is: how many token units (smallest denomination) equal 1 ETH.
+     *      Example for USDC (6 decimals): if ETH = $2500, set to 2500_000000 (2500 * 10^6).
+     *      Example for DAI (18 decimals): if ETH = $2500, set to 2500_000000000000000000 (2500 * 10^18).
+     *      Set to 0 to disable token-based gas deduction and fall back to relayerGasPool.
+     * @param token ERC20 token address
+     * @param price Token units per 1 ETH
+     */
+    function setEthPricePerToken(address token, uint256 price) external onlyOwner {
+        emit EthPricePerTokenUpdated(token, ethPricePerToken[token], price);
+        ethPricePerToken[token] = price;
+    }
+
+    /**
+     * @notice Batch-set ETH-to-token exchange rates
+     * @param tokens Array of token addresses
+     * @param prices Array of prices (token units per 1 ETH)
+     */
+    function setEthPricePerTokenBatch(address[] calldata tokens, uint256[] calldata prices) external onlyOwner {
+        require(tokens.length == prices.length, "Length mismatch");
+        for (uint256 i = 0; i < tokens.length; i++) {
+            emit EthPricePerTokenUpdated(tokens[i], ethPricePerToken[tokens[i]], prices[i]);
+            ethPricePerToken[tokens[i]] = prices[i];
+        }
+    }
+
     function authorizeRelayer(address _relayer, bool _authorized) external onlyOwner {
         authorizedRelayers[_relayer] = _authorized;
         emit RelayerAuthorized(_relayer, _authorized);
@@ -572,16 +613,36 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
                 if (!success) revert GasReimbursementFailed();
             }
         } else {
-            // H-1 fix: ERC20 — protocol fee stays in contract, gas reimbursement from pool
-            if (protocolFee > maxRelayerFee) revert MaxRelayerFeeExceeded();
-            netAmount = amount - protocolFee;
-            TokenHandler.handleWithdrawal(token, recipient, netAmount);
-            // Protocol fee retained in contract as ERC20 tokens for owner withdrawal
-            if (gasReimbursement > 0) {
-                if (relayerGasPool < gasReimbursement) revert InsufficientGasPool();
-                relayerGasPool -= gasReimbursement;
-                (bool success, ) = msg.sender.call{value: gasReimbursement}("");
-                if (!success) revert GasReimbursementFailed();
+            // ERC20 — protocol fee stays in contract
+            // Gas reimbursement: deduct from token amount if exchange rate set, else from gas pool
+            uint256 gasReimbursementInTokens = 0;
+            uint256 tokenPrice = ethPricePerToken[token];
+
+            if (tokenPrice > 0) {
+                // Convert gas cost (ETH) to token units using admin-set exchange rate
+                // Use fixed gas estimate instead of measured gas (more predictable for users)
+                uint256 fixedGasCostWei = erc20RelayFixedGas * tx.gasprice;
+                // gasReimbursementInTokens = fixedGasCostWei * tokenPrice / 1e18
+                gasReimbursementInTokens = (fixedGasCostWei * tokenPrice) / 1e18;
+
+                if (protocolFee + gasReimbursementInTokens > maxRelayerFee) revert MaxRelayerFeeExceeded();
+                netAmount = amount - protocolFee - gasReimbursementInTokens;
+                TokenHandler.handleWithdrawal(token, recipient, netAmount);
+                // Send gas reimbursement tokens to relayer (they can swap to ETH off-chain)
+                if (gasReimbursementInTokens > 0) {
+                    SafeERC20.safeTransfer(IERC20(token), msg.sender, gasReimbursementInTokens);
+                }
+            } else {
+                // Fallback: gas reimbursement from ETH gas pool (legacy behavior)
+                if (protocolFee > maxRelayerFee) revert MaxRelayerFeeExceeded();
+                netAmount = amount - protocolFee;
+                TokenHandler.handleWithdrawal(token, recipient, netAmount);
+                if (gasReimbursement > 0) {
+                    if (relayerGasPool < gasReimbursement) revert InsufficientGasPool();
+                    relayerGasPool -= gasReimbursement;
+                    (bool success, ) = msg.sender.call{value: gasReimbursement}("");
+                    if (!success) revert GasReimbursementFailed();
+                }
             }
         }
 
@@ -645,14 +706,30 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
                 if (!success) revert GasReimbursementFailed();
             }
         } else {
-            if (protocolFee > maxRelayerFee) revert MaxRelayerFeeExceeded();
-            netAmount = amount - protocolFee;
-            TokenHandler.handleWithdrawal(token, targetAddress, netAmount);
-            if (gasReimbursement > 0) {
-                if (relayerGasPool < gasReimbursement) revert InsufficientGasPool();
-                relayerGasPool -= gasReimbursement;
-                (bool success, ) = msg.sender.call{value: gasReimbursement}("");
-                if (!success) revert GasReimbursementFailed();
+            // ERC20 — same token-based gas deduction logic as withdrawViaRelayer
+            uint256 gasReimbursementInTokens = 0;
+            uint256 tokenPrice = ethPricePerToken[token];
+
+            if (tokenPrice > 0) {
+                uint256 fixedGasCostWei = erc20RelayFixedGas * tx.gasprice;
+                gasReimbursementInTokens = (fixedGasCostWei * tokenPrice) / 1e18;
+
+                if (protocolFee + gasReimbursementInTokens > maxRelayerFee) revert MaxRelayerFeeExceeded();
+                netAmount = amount - protocolFee - gasReimbursementInTokens;
+                TokenHandler.handleWithdrawal(token, targetAddress, netAmount);
+                if (gasReimbursementInTokens > 0) {
+                    SafeERC20.safeTransfer(IERC20(token), msg.sender, gasReimbursementInTokens);
+                }
+            } else {
+                if (protocolFee > maxRelayerFee) revert MaxRelayerFeeExceeded();
+                netAmount = amount - protocolFee;
+                TokenHandler.handleWithdrawal(token, targetAddress, netAmount);
+                if (gasReimbursement > 0) {
+                    if (relayerGasPool < gasReimbursement) revert InsufficientGasPool();
+                    relayerGasPool -= gasReimbursement;
+                    (bool success, ) = msg.sender.call{value: gasReimbursement}("");
+                    if (!success) revert GasReimbursementFailed();
+                }
             }
         }
 
@@ -948,6 +1025,61 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
         returns (bool)
     {
         return TokenHandler.isValidDenomination(tokenInfo[token], amount);
+    }
+
+    /**
+     * @notice Estimate relay fee breakdown for a given token and amount
+     * @dev Used by frontend to show accurate fee estimates before withdrawal.
+     *      For native ETH: returns gas reimbursement in ETH (gasEstimate * gasPrice).
+     *      For ERC20 with exchange rate set: returns gas cost converted to token units.
+     *      For ERC20 without exchange rate: returns 0 gas reimbursement (paid from pool).
+     * @param token Token address (ETH_ADDRESS for native)
+     * @param amount Withdrawal amount in smallest units
+     * @param gasPrice Current gas price in wei (pass tx.gasprice or estimate)
+     * @return protocolFee Protocol fee in token units
+     * @return gasReimbursementEth Gas reimbursement in wei (only for native ETH)
+     * @return gasReimbursementToken Gas reimbursement in token units (only for ERC20 with price set)
+     * @return netAmount Estimated amount recipient receives
+     * @return feeBps Current protocol fee in basis points
+     * @return fixedGas Fixed gas estimate used for ERC20 calculation
+     * @return tokenPrice Current ethPricePerToken for this token (0 if not set)
+     */
+    function getRelayFeeEstimate(
+        address token,
+        uint256 amount,
+        uint256 gasPrice
+    ) external view returns (
+        uint256 protocolFee,
+        uint256 gasReimbursementEth,
+        uint256 gasReimbursementToken,
+        uint256 netAmount,
+        uint256 feeBps,
+        uint256 fixedGas,
+        uint256 tokenPrice
+    ) {
+        feeBps = protocolFeeBasisPoints;
+        fixedGas = erc20RelayFixedGas;
+        protocolFee = (amount * feeBps) / 10000;
+
+        if (token == ETH_ADDRESS) {
+            // Native: gas reimbursement = estimated gas * gasPrice
+            uint256 estimatedGas = 250000; // ~200k actual + relayGasOverhead
+            gasReimbursementEth = estimatedGas * gasPrice;
+            uint256 totalFee = protocolFee + gasReimbursementEth;
+            netAmount = amount > totalFee ? amount - totalFee : 0;
+        } else {
+            tokenPrice = ethPricePerToken[token];
+            if (tokenPrice > 0) {
+                // ERC20 with exchange rate: convert gas to token units
+                uint256 gasCostWei = fixedGas * gasPrice;
+                gasReimbursementToken = (gasCostWei * tokenPrice) / 1e18;
+                uint256 totalFee = protocolFee + gasReimbursementToken;
+                netAmount = amount > totalFee ? amount - totalFee : 0;
+            } else {
+                // ERC20 without exchange rate: gas from pool, user only pays protocol fee
+                netAmount = amount > protocolFee ? amount - protocolFee : 0;
+            }
+        }
     }
 
     /**
