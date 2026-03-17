@@ -36,6 +36,7 @@ module.exports = {
     // Hardhat network
     hardhat: {
       chainId: 31337,
+      initialBaseFeePerGas: 1000000000, // 1 gwei — ensures block.basefee > 0 for relay fee tests
       mining: {
         auto: true,
         interval: 1000

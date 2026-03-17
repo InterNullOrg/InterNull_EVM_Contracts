@@ -70,6 +70,8 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     uint256 public relayGasOverhead = 50000;             // H-3 fix: Configurable gas overhead for relay reimbursement
     uint256 public erc20RelayFixedGas = 200000;          // Fixed gas estimate for ERC20 relay fee calculation
     mapping(address => uint256) public ethPricePerToken;  // How many token units (in smallest unit) equal 1 ETH — admin-set via CoinGecko
+    mapping(address => uint256) public ethPriceUpdatedAt; // Timestamp of last price update per token
+    uint256 public maxPriceAge = 1 days;                  // Maximum age of ethPricePerToken before fallback to gas pool
 
     // Events
     event TokenAdded(address indexed token, string symbol, uint8 decimals, uint256[] denominations);
@@ -120,7 +122,8 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     event RelayerGasPoolWithdrawn(uint256 amount, uint256 newBalance);
     event RelayGasOverheadUpdated(uint256 oldOverhead, uint256 newOverhead);
     event ERC20RelayFixedGasUpdated(uint256 oldGas, uint256 newGas);
-    event EthPricePerTokenUpdated(address indexed token, uint256 oldPrice, uint256 newPrice);
+    event EthPricePerTokenUpdated(address indexed token, uint256 oldPrice, uint256 newPrice, uint256 timestamp);
+    event MaxPriceAgeUpdated(uint256 oldAge, uint256 newAge);
 
     // Custom errors
     error TokenNotSupported();
@@ -509,8 +512,10 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
      * @param price Token units per 1 ETH
      */
     function setEthPricePerToken(address token, uint256 price) external onlyOwner {
-        emit EthPricePerTokenUpdated(token, ethPricePerToken[token], price);
+        require(token != ETH_ADDRESS, "Cannot set price for native ETH");
+        emit EthPricePerTokenUpdated(token, ethPricePerToken[token], price, block.timestamp);
         ethPricePerToken[token] = price;
+        ethPriceUpdatedAt[token] = block.timestamp;
     }
 
     /**
@@ -521,9 +526,20 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
     function setEthPricePerTokenBatch(address[] calldata tokens, uint256[] calldata prices) external onlyOwner {
         require(tokens.length == prices.length, "Length mismatch");
         for (uint256 i = 0; i < tokens.length; i++) {
-            emit EthPricePerTokenUpdated(tokens[i], ethPricePerToken[tokens[i]], prices[i]);
+            require(tokens[i] != ETH_ADDRESS, "Cannot set price for native ETH");
+            emit EthPricePerTokenUpdated(tokens[i], ethPricePerToken[tokens[i]], prices[i], block.timestamp);
             ethPricePerToken[tokens[i]] = prices[i];
+            ethPriceUpdatedAt[tokens[i]] = block.timestamp;
         }
+    }
+
+    /**
+     * @notice Sets the maximum age for exchange rate prices before fallback to gas pool
+     * @param _maxAge Maximum age in seconds (e.g. 86400 = 1 day)
+     */
+    function setMaxPriceAge(uint256 _maxAge) external onlyOwner {
+        emit MaxPriceAgeUpdated(maxPriceAge, _maxAge);
+        maxPriceAge = _maxAge;
     }
 
     function authorizeRelayer(address _relayer, bool _authorized) external onlyOwner {
@@ -614,15 +630,15 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
             }
         } else {
             // ERC20 — protocol fee stays in contract
-            // Gas reimbursement: deduct from token amount if exchange rate set, else from gas pool
+            // Gas reimbursement: deduct from token amount if exchange rate is set and fresh, else from gas pool
             uint256 gasReimbursementInTokens = 0;
             uint256 tokenPrice = ethPricePerToken[token];
+            bool priceIsFresh = tokenPrice > 0 && (maxPriceAge == 0 || block.timestamp - ethPriceUpdatedAt[token] <= maxPriceAge);
 
-            if (tokenPrice > 0) {
-                // Convert gas cost (ETH) to token units using admin-set exchange rate
-                // Use fixed gas estimate instead of measured gas (more predictable for users)
-                uint256 fixedGasCostWei = erc20RelayFixedGas * tx.gasprice;
-                // gasReimbursementInTokens = fixedGasCostWei * tokenPrice / 1e18
+            if (priceIsFresh) {
+                // Use block.basefee (not tx.gasprice) to prevent relayer from inflating gas price
+                // block.basefee reflects actual network conditions, not relayer's chosen priority fee
+                uint256 fixedGasCostWei = erc20RelayFixedGas * block.basefee;
                 gasReimbursementInTokens = (fixedGasCostWei * tokenPrice) / 1e18;
 
                 if (protocolFee + gasReimbursementInTokens > maxRelayerFee) revert MaxRelayerFeeExceeded();
@@ -709,9 +725,10 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
             // ERC20 — same token-based gas deduction logic as withdrawViaRelayer
             uint256 gasReimbursementInTokens = 0;
             uint256 tokenPrice = ethPricePerToken[token];
+            bool priceIsFresh = tokenPrice > 0 && (maxPriceAge == 0 || block.timestamp - ethPriceUpdatedAt[token] <= maxPriceAge);
 
-            if (tokenPrice > 0) {
-                uint256 fixedGasCostWei = erc20RelayFixedGas * tx.gasprice;
+            if (priceIsFresh) {
+                uint256 fixedGasCostWei = erc20RelayFixedGas * block.basefee;
                 gasReimbursementInTokens = (fixedGasCostWei * tokenPrice) / 1e18;
 
                 if (protocolFee + gasReimbursementInTokens > maxRelayerFee) revert MaxRelayerFeeExceeded();
@@ -1063,20 +1080,22 @@ contract MultiTokenTreasury is Ownable, ReentrancyGuard, Pausable {
 
         if (token == ETH_ADDRESS) {
             // Native: gas reimbursement = estimated gas * gasPrice
-            uint256 estimatedGas = 250000; // ~200k actual + relayGasOverhead
+            // Use 200k base + relayGasOverhead to match actual contract behavior
+            uint256 estimatedGas = 200000 + relayGasOverhead;
             gasReimbursementEth = estimatedGas * gasPrice;
             uint256 totalFee = protocolFee + gasReimbursementEth;
             netAmount = amount > totalFee ? amount - totalFee : 0;
         } else {
             tokenPrice = ethPricePerToken[token];
-            if (tokenPrice > 0) {
-                // ERC20 with exchange rate: convert gas to token units
+            bool priceIsFresh = tokenPrice > 0 && (maxPriceAge == 0 || block.timestamp - ethPriceUpdatedAt[token] <= maxPriceAge);
+            if (priceIsFresh) {
+                // ERC20 with exchange rate: convert gas to token units using basefee
                 uint256 gasCostWei = fixedGas * gasPrice;
                 gasReimbursementToken = (gasCostWei * tokenPrice) / 1e18;
                 uint256 totalFee = protocolFee + gasReimbursementToken;
                 netAmount = amount > totalFee ? amount - totalFee : 0;
             } else {
-                // ERC20 without exchange rate: gas from pool, user only pays protocol fee
+                // ERC20 without exchange rate (or stale): gas from pool, user only pays protocol fee
                 netAmount = amount > protocolFee ? amount - protocolFee : 0;
             }
         }
