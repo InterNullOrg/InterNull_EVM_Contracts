@@ -1,0 +1,2 @@
+# gitleaks false positives - verified 2026-10-26 (contract addresses, public test keys, client IDs, placeholders)
+fa2a157928857fb1221bf90051ab5e7f54f0aa62:test/MultiTokenTreasury.test.js:generic-api-key:1040
